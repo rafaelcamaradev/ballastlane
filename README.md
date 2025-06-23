@@ -46,10 +46,9 @@ events_df = raw_events_df.withColumn(
 The `value` column in `events_df` contains JSON strings. The `offer_id` is extracted from these JSON strings. This involves cleaning the JSON by replacing single quotes with double quotes and then parsing the JSON to get the `offer id`.
 
 ```python
-events_df = events_df.withColumn("json_details", regexp_replace("value", "'", '"'))
-schema = StructType().add("offer id", StringType())
-events_df = events_df.withColumn("json_parsed", from_json("json_clean", schema))
-events_df = events_df.withColumn("offer_id", col("json_parsed.`offer id`"))
+value_schema = StructType().add("offer_id", StringType())
+events_df = events_df.withColumn("value_json", from_json("value", value_schema))
+events_df = events_df.withColumn("offer_id", col("value_json.offer_id"))
 ```
 
 ### 2.3. Convert Event Timestamps
@@ -125,7 +124,7 @@ Calculates the average amount of all 'transaction' events by extracting the `amo
 
 ```python
 average_transaction_amount = events_df.filter(col("event") == "transaction") \
-    .agg(avg(get_json_object(col("value"), "$.amount").cast("double"))).collect()[0][0]
+    .agg(avg(col("amount").cast("double"))).collect()[0][0]
 ```
 
 ### 3.7. Number of Offers Completed vs. Not Completed
@@ -181,4 +180,60 @@ customer_clv = full_df.filter(col("event") == "transaction") \
                        .orderBy(col("total_spent").desc())
 ```
 
+### 3.11. Completion Rate by Marketing Channel
 
+Explodes the `channels` array from the `offers_df`, joins it with `full_df`, and computes the offer completion rate for each marketing channel.
+
+```python
+offers_df = offers_df.withColumn("channels_clean", regexp_replace(col("channels"), "'", '"'))
+offers_df = offers_df.withColumn("channels_array", from_json(col("channels_clean"), ArrayType(StringType())))
+offers_with_channel = offers_df.withColumn("channel", explode("channels_array"))
+
+full_df_with_channels = full_df.join(
+    offers_with_channel.select("offer_id", "channel"), on="offer_id", how="left"
+)
+
+channel_completion_rate = full_df_with_channels.groupBy("channel") \
+    .agg(
+        count("offer_id").alias("total_events"),
+        sum("offer_completed").alias("completed_offers")
+    ) \
+    .withColumn("completion_rate", (col("completed_offers") / col("total_events")) * 100)
+```
+
+### 3.12. Age Distribution by Offer Completion Status
+
+Compares the age distribution of customers who completed offers versus those who did not.
+
+```python
+customer_with_events = customer_with_events.withColumn("age_group", 
+    when(col("age") < 25, "<25")
+    .when((col("age") >= 25) & (col("age") < 35), "25-34")
+    .when((col("age") >= 35) & (col("age") < 45), "35-44")
+    .when((col("age") >= 45) & (col("age") < 55), "45-54")
+    .when((col("age") >= 55) & (col("age") < 65), "55-64")
+    .otherwise("65+")
+)
+
+age_completion_distribution = customer_with_events.groupBy("age_group", "offer_completed") \
+    .agg(count("*").alias("count")) \
+    .orderBy("age_group", "offer_completed")
+```
+
+### 3.13. Average Time to Complete Offers
+
+Calculates the average number of hours it takes customers to complete an offer after receiving it.
+
+```python
+received_df = events_df.filter(col("event") == "offer received") \
+    .select("customer_id", "offer_id", col("event_datetime").alias("received_time"))
+
+completed_df = events_df.filter(col("event") == "offer completed") \
+    .select("customer_id", "offer_id", col("event_datetime").alias("completed_time"))
+
+offer_timings = received_df.join(completed_df, ["customer_id", "offer_id"], "inner") \
+    .withColumn("completion_duration_hours", 
+                (col("completed_time").cast("long") - col("received_time").cast("long")) / 3600)
+
+avg_completion_time = offer_timings.agg(avg("completion_duration_hours")).collect()[0][0]
+```

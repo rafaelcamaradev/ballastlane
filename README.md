@@ -2,6 +2,16 @@
 
 This README explains the steps involved in the data pipeline for gathering and analyzing customer and offer data, as implemented in `pipeline.ipynb`.
 
++-------------+          1:N          +-------------+
+|  customers  |---------------------> |   events    |
++-------------+                       +-------------+
+                                          ^
+                                          |
+                                          | 1:N (only when event involves offer_id)
+                                     +-------------+
+                                     |   offers    |
+                                     +-------------+
+
 ## 1. Data Ingestion
 
 The first step involves ingesting raw data from CSV files into Spark DataFrames. The following files are read:
